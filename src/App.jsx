@@ -23,7 +23,6 @@ createWeb3Modal({
 
 // --- 스마트 컨트랙트 ABI ---
 const CONTRACT_ABI = [
-    // ...전체 ABI...
     { "inputs": [{ "internalType": "uint256", "name": "amount", "type": "uint256" }], "name": "addDeposit", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
     { "inputs": [{ "internalType": "uint256", "name": "amount", "type": "uint256" }], "name": "becomeKing", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
     { "inputs": [], "name": "claimReward", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
@@ -62,7 +61,7 @@ const CONTRACT_ABI = [
 
 // --- 헬퍼 함수 및 아이콘 ---
 const parseErrorMessage = (error) => {
-    const message = error.reason || error.message || "";
+    const message = error.reason || error.message || error?.data?.message || "An unknown error occurred.";
     if (message.includes("user rejected transaction")) return "요청을 거부하셨습니다.";
     if (message.includes("Deposit must be higher")) return "현재 킹의 입금액보다 더 많아야 합니다.";
     if (message.includes("Only the current king can")) return "오직 현재 킹만 이 행동을 할 수 있습니다.";
@@ -77,18 +76,17 @@ const formatTime = (seconds) => {
     if (seconds === 0) return "수령 가능!";
     const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
     const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-    const s = (seconds % 60).toString().padStart(2, '0');
+    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
     return `${h}:${m}:${s}`;
 };
 const IconWallet = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>;
 const IconCrown = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>;
-const IconTrophy = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>;
+const IconTrophy = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98-.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>;
 
 // --- 메인 앱 컴포넌트 ---
 export default function App() {
     const [contract, setContract] = useState(null);
-    const [signer, setSigner] = useState(null);
-    const [usd1Decimals, setUsd1Decimals] = useState(18); // 기본값 18
+    const [usd1Decimals, setUsd1Decimals] = useState(18);
     
     const [gameInfo, setGameInfo] = useState({
         currentKing: ethers.constants.AddressZero,
@@ -96,89 +94,97 @@ export default function App() {
         rewardPool: "0.0",
         rolloverAmount: "0.0",
         remainingTime: 0,
+        lastSyncTime: Date.now()
     });
     const [txStatus, setTxStatus] = useState({ message: "", type: "" });
     const [amount, setAmount] = useState("");
+    const [displayTime, setDisplayTime] = useState(0);
 
     const { address, isConnected } = useWeb3ModalAccount();
     const { walletProvider } = useWeb3ModalProvider();
+
+    const readOnlyContract = useMemo(() => {
+        if (!CONTRACT_ADDRESS) return null;
+        const provider = new ethers.providers.JsonRpcProvider(bscTestnet.rpcUrl);
+        return new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+    }, []);
 
     useEffect(() => {
         if (isConnected && walletProvider && address) {
             const ethersProvider = new ethers.providers.Web3Provider(walletProvider);
             const ethersSigner = ethersProvider.getSigner();
             const ethersContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, ethersSigner);
-            setSigner(ethersSigner);
             setContract(ethersContract);
         } else {
-            setSigner(null);
             setContract(null);
         }
     }, [isConnected, walletProvider, address]);
-    
-    // [Gemini 감사 반영 L-01] Decimals는 한 번만 조회합니다.
-    useEffect(() => {
-        if (!contract) return;
-        const fetchDecimals = async () => {
-            try {
-                const usd1Address = await contract.usd1();
-                const usd1Contract = new ethers.Contract(usd1Address, ["function decimals() view returns (uint8)"], contract.provider);
-                const decimals = await usd1Contract.decimals();
-                setUsd1Decimals(decimals);
-            } catch (e) {
-                console.error("Failed to fetch token decimals, defaulting to 18.", e);
-            }
-        };
-        fetchDecimals();
-    }, [contract]);
 
     const updateGameInfo = useCallback(async () => {
-        if (!contract || !usd1Decimals) return;
+        const contractToUse = contract || readOnlyContract;
+        if (!contractToUse) return;
         try {
-            const info = await contract.getGameInfo();
+            const info = await contractToUse.getGameInfo();
+            // Decimals는 한 번만 조회하도록 로직 수정
+            if (usd1Decimals === 18 && contractToUse.provider) { 
+                const usd1Address = await contractToUse.usd1();
+                const usd1Contract = new ethers.Contract(usd1Address, ["function decimals() view returns (uint8)"], contractToUse.provider);
+                const decimals = await usd1Contract.decimals();
+                setUsd1Decimals(decimals);
+            }
+
             setGameInfo({
                 currentKing: info._currentKing,
                 currentDeposit: ethers.utils.formatUnits(info._currentDeposit, usd1Decimals),
                 rewardPool: ethers.utils.formatUnits(info._rewardPool, usd1Decimals),
                 rolloverAmount: ethers.utils.formatUnits(info._rolloverAmount, usd1Decimals),
                 remainingTime: Number(info._remainingTime),
+                lastSyncTime: Date.now()
             });
         } catch (error) {
             console.error("게임 정보 업데이트 실패:", error);
         }
-    }, [contract, usd1Decimals]);
+    }, [contract, readOnlyContract, usd1Decimals]);
+
+    useEffect(() => {
+        updateGameInfo(); // 지갑 연결 여부와 관계없이 초기 데이터 로드
+    }, [updateGameInfo]);
 
     useEffect(() => {
         if (contract) {
-            updateGameInfo(); // 초기 로드
-            // 이벤트 리스너
-            const updateListener = () => updateGameInfo();
+            const updateListener = () => setTimeout(updateGameInfo, 1000); 
             contract.on("NewKing", updateListener);
             contract.on("DepositAdded", updateListener);
             contract.on("RewardClaimed", updateListener);
-
-            // [Gemini 감사 반영 M-02] 30초마다 데이터 동기화
-            const poller = setInterval(() => updateGameInfo(), 30000);
-
             return () => {
                 contract.off("NewKing", updateListener);
                 contract.off("DepositAdded", updateListener);
                 contract.off("RewardClaimed", updateListener);
-                clearInterval(poller);
             };
         }
     }, [contract, updateGameInfo]);
 
-    // 로컬 타이머
     useEffect(() => {
         const timer = setInterval(() => {
-            setGameInfo(prev => ({...prev, remainingTime: Math.max(0, prev.remainingTime - 1)}));
+            if (gameInfo.currentKing !== ethers.constants.AddressZero) {
+                const timeSinceLastSync = Math.floor((Date.now() - gameInfo.lastSyncTime) / 1000);
+                const newDisplayTime = Math.max(0, gameInfo.remainingTime - timeSinceLastSync);
+                setDisplayTime(newDisplayTime);
+            } else {
+                setDisplayTime(0); // 킹이 없으면 타이머를 0으로 설정
+            }
         }, 1000);
         return () => clearInterval(timer);
-    }, []);
+    }, [gameInfo]);
 
     const handleTransaction = async (action) => {
-        if (!contract || !signer) { /* ... */ return; }
+        if (!isConnected || !walletProvider) {
+            setTxStatus({ message: "지갑이 연결되지 않았습니다.", type: "error" }); return;
+        }
+        const ethersProvider = new ethers.providers.Web3Provider(walletProvider);
+        const signer = ethersProvider.getSigner();
+        const contractWithSigner = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+        
         setTxStatus({ message: "트랜잭션을 준비 중입니다...", type: "info" });
         try {
             if (action === "becomeKing" || action === "addDeposit") {
@@ -186,7 +192,7 @@ export default function App() {
                     throw new Error("유효한 입금 수량을 입력해주세요.");
                 }
                 const parsedAmount = ethers.utils.parseUnits(amount, usd1Decimals);
-                const usd1Address = await contract.usd1();
+                const usd1Address = await contractWithSigner.usd1();
                 const usd1Contract = new ethers.Contract(usd1Address, ["function balanceOf(address) view returns (uint256)", "function allowance(address, address) view returns (uint256)", "function approve(address, uint256) returns (bool)"], signer);
 
                 const userBalance = await usd1Contract.balanceOf(address);
@@ -194,21 +200,22 @@ export default function App() {
                     throw new Error("USD1 잔액이 부족합니다.");
                 }
 
-                setTxStatus({ message: "USD1 토큰 허용량을 확인 중입니다...", type: "info" });
-                const currentAllowance = await usd1Contract.allowance(address, contract.address);
+                const currentAllowance = await usd1Contract.allowance(address, contractWithSigner.address);
                 if (currentAllowance.lt(parsedAmount)) {
                     setTxStatus({ message: "USD1 토큰 사용을 승인해주세요...", type: "info" });
-                    // [Gemini 감사 반영 H-01] 정확한 금액만 승인합니다.
-                    const approveTx = await usd1Contract.approve(contract.address, parsedAmount);
+                    const approveTx = await usd1Contract.approve(contractWithSigner.address, parsedAmount);
                     await approveTx.wait();
                 }
 
                 setTxStatus({ message: "왕좌에 도전하는 중입니다...", type: "info" });
-                const tx = action === "becomeKing" ? await contract.becomeKing(parsedAmount) : await contract.addDeposit(parsedAmount);
+                const tx = action === "becomeKing" ? await contractWithSigner.becomeKing(parsedAmount) : await contractWithSigner.addDeposit(parsedAmount);
                 await tx.wait();
                 setTxStatus({ message: "성공! 새로운 역사가 시작됩니다.", type: "success" });
             } else if (action === "claimReward") {
-                // ... 이전과 동일
+                setTxStatus({ message: "보상 수령을 요청하는 중입니다...", type: "info" });
+                const tx = await contractWithSigner.claimReward();
+                await tx.wait();
+                setTxStatus({ message: "성공! 보상이 올바르게 지급되었습니다.", type: "success" });
             }
             setAmount("");
             await updateGameInfo();
@@ -219,8 +226,9 @@ export default function App() {
     };
     
     const isKing = useMemo(() => address && gameInfo.currentKing.toLowerCase() === address.toLowerCase(), [address, gameInfo.currentKing]);
+    const isGameActive = useMemo(() => gameInfo.currentKing !== ethers.constants.AddressZero, [gameInfo.currentKing]);
+    const roundNeedsReset = useMemo(() => displayTime === 0 && isGameActive, [displayTime, isGameActive]);
 
-    // --- 렌더링 ---
     return (
         <>
             <div className="bg-gray-900 text-white min-h-screen p-4 sm:p-8">
@@ -253,37 +261,48 @@ export default function App() {
                                 </div>
                                 <div className="bg-gray-800 p-6 rounded-xl shadow-lg">
                                     <h2 className="text-sm font-bold text-yellow-400 mb-2">남은 시간</h2>
-                                    <p className="text-4xl font-bold font-mono">{formatTime(gameInfo.remainingTime)}</p>
+                                    {isGameActive ? (
+                                        <p className="text-4xl font-bold font-mono">{formatTime(displayTime)}</p>
+                                    ) : (
+                                        <p className="text-2xl font-bold text-gray-400 pt-2">게임 시작 대기 중</p>
+                                    )}
                                     <button 
                                         onClick={() => handleTransaction("claimReward")}
-                                        disabled={gameInfo.remainingTime > 0 || gameInfo.currentKing === ethers.constants.AddressZero}
+                                        disabled={!roundNeedsReset}
                                         className="w-full mt-2 py-2 px-4 text-sm font-bold rounded-lg transition-colors disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed bg-green-500 hover:bg-green-600 text-white"
                                     >
                                         라운드 종료 및 보상 분배
                                     </button>
                                 </div>
                             </div>
-
-                            <div className="bg-gray-800 p-6 sm:p-8 rounded-xl shadow-lg">
-                                <h2 className="text-2xl font-bold mb-4">{isKing ? "👑 왕좌 방어하기" : "⚔️ 왕좌에 도전하기"}</h2>
-                                <p className="text-gray-400 mb-6">{isKing ? "추가 입금을 통해 왕좌를 굳건히 하고 타이머를 초기화하세요." : "현재 킹보다 더 많은 금액을 입금하여 새로운 역사를 만드세요."}</p>
-                                
-                                <div className="flex flex-col sm:flex-row items-center gap-4">
-                                    <input
-                                        type="number"
-                                        placeholder="입금할 USD1 수량"
-                                        value={amount}
-                                        onChange={(e) => setAmount(e.target.value)}
-                                        className="w-full sm:w-auto flex-grow bg-gray-700 text-white px-4 py-3 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-500"
-                                    />
-                                    <button
-                                        onClick={() => handleTransaction(isKing ? "addDeposit" : "becomeKing")}
-                                        className="w-full sm:w-auto bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-bold py-3 px-8 rounded-lg transition-transform transform hover:scale-105"
-                                    >
-                                        {isKing ? "추가 입금" : "왕좌 차지하기"}
-                                    </button>
+                            
+                            {roundNeedsReset ? (
+                                <div className="bg-blue-500/20 text-blue-300 p-6 rounded-xl shadow-lg text-center">
+                                    <h2 className="text-2xl font-bold mb-2">이전 라운드 종료됨</h2>
+                                    <p>새로운 라운드를 시작하려면 누구나 '라운드 종료 및 보상 분배' 버튼을 누를 수 있습니다.</p>
                                 </div>
-                            </div>
+                            ) : (
+                                <div className="bg-gray-800 p-6 sm:p-8 rounded-xl shadow-lg">
+                                    <h2 className="text-2xl font-bold mb-4">{isKing ? "👑 왕좌 방어하기" : "⚔️ 왕좌에 도전하기"}</h2>
+                                    <p className="text-gray-400 mb-6">{isKing ? "추가 입금을 통해 왕좌를 굳건히 하고 타이머를 초기화하세요." : "현재 킹보다 더 많은 금액을 입금하여 새로운 역사를 만드세요."}</p>
+                                    
+                                    <div className="flex flex-col sm:flex-row items-center gap-4">
+                                        <input
+                                            type="number"
+                                            placeholder="입금할 USD1 수량"
+                                            value={amount}
+                                            onChange={(e) => setAmount(e.target.value)}
+                                            className="w-full sm:w-auto flex-grow bg-gray-700 text-white px-4 py-3 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                                        />
+                                        <button
+                                            onClick={() => handleTransaction(isKing ? "addDeposit" : "becomeKing")}
+                                            className="w-full sm:w-auto bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-bold py-3 px-8 rounded-lg transition-transform transform hover:scale-105"
+                                        >
+                                            {isKing ? "추가 입금" : "왕좌 차지하기"}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
 
                             {txStatus.message && (
                                 <div className={`mt-6 p-4 rounded-lg text-center ${
