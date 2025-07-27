@@ -18,7 +18,19 @@ const metadata = {
 };
 createWeb3Modal({
   ethersConfig: defaultConfig({ metadata, defaultChainId: 97 }),
-  chains: [bscMainnet, bscTestnet], projectId, enableAnalytics: true
+  chains: [bscMainnet, bscTestnet],
+  projectId,
+  enableAnalytics: false,
+  featuredWalletIds: ['metaMask', 'binance', 'trust'],
+  excludeWalletIds: [
+    'web3auth',
+    'walletConnect',
+    'coinbase',
+    'rainbow',
+    'safe',
+    'zerion',
+    'okx'
+  ]
 });
 
 // --- 스마트 컨트랙트 ABI ---
@@ -81,13 +93,13 @@ const formatTime = (seconds) => {
 };
 const IconWallet = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>;
 const IconCrown = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>;
-const IconTrophy = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98-.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>;
+const IconTrophy = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>;
 
 // --- 메인 앱 컴포넌트 ---
 export default function App() {
     const [contract, setContract] = useState(null);
     const [usd1Decimals, setUsd1Decimals] = useState(18);
-    
+
     const [gameInfo, setGameInfo] = useState({
         currentKing: ethers.constants.AddressZero,
         currentDeposit: "0.0",
@@ -125,7 +137,6 @@ export default function App() {
         if (!contractToUse) return;
         try {
             const info = await contractToUse.getGameInfo();
-            // Decimals는 한 번만 조회하도록 로직 수정
             if (usd1Decimals === 18 && contractToUse.provider) { 
                 const usd1Address = await contractToUse.usd1();
                 const usd1Contract = new ethers.Contract(usd1Address, ["function decimals() view returns (uint8)"], contractToUse.provider);
@@ -147,9 +158,9 @@ export default function App() {
     }, [contract, readOnlyContract, usd1Decimals]);
 
     useEffect(() => {
-        updateGameInfo(); // 지갑 연결 여부와 관계없이 초기 데이터 로드
+        updateGameInfo();
     }, [updateGameInfo]);
-
+    
     useEffect(() => {
         if (contract) {
             const updateListener = () => setTimeout(updateGameInfo, 1000); 
@@ -171,7 +182,7 @@ export default function App() {
                 const newDisplayTime = Math.max(0, gameInfo.remainingTime - timeSinceLastSync);
                 setDisplayTime(newDisplayTime);
             } else {
-                setDisplayTime(0); // 킹이 없으면 타이머를 0으로 설정
+                setDisplayTime(0);
             }
         }, 1000);
         return () => clearInterval(timer);
